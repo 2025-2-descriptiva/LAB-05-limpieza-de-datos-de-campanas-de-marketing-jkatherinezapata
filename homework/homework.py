@@ -60,11 +60,11 @@ def clean_campaign_data():
     if not paths:
         raise FileNotFoundError("No se encontraron '*.csv.zip' en files/input/")
 
-    # Lee cualquier CSV dentro del zip, infiriendo separador
+
     dfs = [pd.read_csv(p, compression="zip", sep=None, engine="python") for p in paths]
     df = pd.concat(dfs, ignore_index=True)
 
-    # Normaliza encabezados
+
     df.columns = (
         df.columns.astype(str)
         .str.strip()
@@ -72,19 +72,19 @@ def clean_campaign_data():
         .str.replace("\ufeff", "", regex=False)
     )
 
-    # Helper: devuelve la primera columna que exista; si ninguna, None
+
     def opt_col(*names):
         for n in names:
             if n in df.columns:
                 return n
         return None
 
-    # Alias típicos
+
     c_age      = opt_col("age")
     c_job      = opt_col("job")
     c_marital  = opt_col("marital")
     c_educ     = opt_col("education")
-    c_default  = opt_col("default")                       # <- puede faltar en tu copia
+    c_default  = opt_col("default") 
     c_housing  = opt_col("housing")
     c_campaign = opt_col("campaign")
     c_duration = opt_col("duration")
@@ -96,10 +96,10 @@ def clean_campaign_data():
     c_cpi      = opt_col("cons.price.idx", "cons_price_idx", "conspriceidx")
     c_euribor  = opt_col("euribor3m", "euribor_three_months", "euribor_3m")
 
-    # ID
+
     client_id = pd.Series(range(1, len(df) + 1), name="client_id")
 
-    # -------- CLIENT --------
+
     job = (
         df[c_job].astype(str)
         .str.strip()
@@ -116,7 +116,6 @@ def clean_campaign_data():
         if c_educ else pd.Series([pd.NA] * len(df))
     )
 
-    # Si falta 'default', asume "no" (0) para evitar KeyError en tu entorno
     credit_default = (
         (df[c_default].astype(str).str.lower().eq("yes")).astype(int)
         if c_default else pd.Series([0] * len(df), dtype=int)
@@ -139,7 +138,7 @@ def clean_campaign_data():
         }
     )
 
-    # -------- CAMPAIGN --------
+
     prev_outcome = (
         (df[c_poutcome].astype(str).str.lower().eq("success")).astype(int)
         if c_poutcome else pd.Series([0] * len(df), dtype=int)
@@ -175,10 +174,12 @@ def clean_campaign_data():
         }
     )
 
-    # -------- ECONOMICS --------
+
     def to_float(s):
-        import pandas as pd
-        return pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce").astype(float)
+        return pd.to_numeric(
+            s.astype(str).str.replace(",", ".", regex=False),
+            errors="coerce"
+        ).astype(float)
 
     cons_price_idx = to_float(df[c_cpi]) if c_cpi else pd.Series([float("nan")] * len(df))
     euribor_three_months = to_float(df[c_euribor]) if c_euribor else pd.Series([float("nan")] * len(df))
@@ -191,7 +192,7 @@ def clean_campaign_data():
         }
     )
 
-    # Guardar
+
     client.to_csv(out_dir / "client.csv", index=False)
     campaign.to_csv(out_dir / "campaign.csv", index=False)
     economics.to_csv(out_dir / "economics.csv", index=False)
