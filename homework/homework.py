@@ -3,11 +3,12 @@ from pathlib import Path
 
 def clean_campaign_data():
     """
-    Lee todos los archivos *.csv.zip en files/input/ (sin descomprimir),
-    concatena y genera tres salidas en files/output/:
+    Lee todos los *.csv.zip en files/input/ (sin descomprimir),
+    concatena y genera 3 CSV en files/output/:
       - client.csv: client_id, age, job, marital, education, credit_default, mortgage
-      - campaign.csv: client_id, number_contacts, contact_duration, previous_campaign_contacts,
-                      previous_outcome, campaign_outcome, last_contact_date (YYYY-MM-DD)
+      - campaign.csv: client_id, number_contacts, contact_duration,
+                      previous_campaign_contacts, previous_outcome,
+                      campaign_outcome, last_contact_date (YYYY-MM-DD)
       - economics.csv: client_id, cons_price_idx, euribor_three_months
     """
     import glob
@@ -17,16 +18,16 @@ def clean_campaign_data():
     out_dir = Path("files/output")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- leer todo CSV dentro de cada ZIP (sin descomprimir) y unificar ----
+    # Leer todos los CSV dentro de los ZIP (sin descomprimir)
     paths = sorted(glob.glob(str(in_dir / "*.csv.zip")))
     if not paths:
         raise FileNotFoundError("No se encontraron '*.csv.zip' en files/input/")
 
-    # engine='python' + sep=None -> autodetección (soporta ';')
+    # Autodetecta separador (soporta ';') usando engine=python
     dfs = [pd.read_csv(p, compression="zip", sep=None, engine="python") for p in paths]
     df = pd.concat(dfs, ignore_index=True)
 
-    # ---- normalizar encabezados: string, strip, lower, quitar BOM, etc. ----
+    # Normaliza encabezados
     df.columns = (
         df.columns.astype(str)
           .str.strip()
@@ -34,31 +35,26 @@ def clean_campaign_data():
           .str.replace("\ufeff", "", regex=False)
     )
 
-    # -------- helpers --------
+    # Helpers
     def opt_col(*names: str):
-        """Retorna el primer nombre de columna que exista, o None."""
         for n in names:
             if n in df.columns:
                 return n
         return None
 
-    def to_int_01_from_yes(col_name: str):
-        """Convierte 'yes'->1, otros->0; si falta la columna, devuelve 0."""
+    def to_int_01_from_yes(col):
         import pandas as pd
-        if col_name:
-            return df[col_name].astype(str).str.lower().eq("yes").astype(int)
-        # serie de ceros si no existe
+        if col:
+            return df[col].astype(str).str.lower().eq("yes").astype(int)
         return pd.Series([0] * len(df), dtype=int)
 
-    def to_int_01_from_success(col_name: str):
-        """Convierte 'success'->1, otros->0; si falta, 0."""
+    def to_int_01_from_success(col):
         import pandas as pd
-        if col_name:
-            return df[col_name].astype(str).str.lower().eq("success").astype(int)
+        if col:
+            return df[col].astype(str).str.lower().eq("success").astype(int)
         return pd.Series([0] * len(df), dtype=int)
 
     def to_float(s):
-        """Convierte a float de forma tolerante (coma o punto decimal)."""
         import pandas as pd
         return (
             s.astype(str)
@@ -67,13 +63,12 @@ def clean_campaign_data():
              .astype(float)
         )
 
-    # -------- alias típicos / mapeos --------
+    # Alias/variantes de nombres
     c_age      = opt_col("age")
     c_job      = opt_col("job")
     c_marital  = opt_col("marital")
     c_educ     = opt_col("education")
 
-    # estas pueden variar
     c_default  = opt_col("default", "credit_default")
     c_housing  = opt_col("housing", "mortgage")
 
@@ -89,27 +84,23 @@ def clean_campaign_data():
     c_cpi      = opt_col("cons.price.idx", "cons_price_idx", "conspriceidx")
     c_euribor  = opt_col("euribor3m", "euribor_three_months")
 
-    # -------- CLIENT --------
-    # client_id 1..n
     import pandas as pd
     client_id = pd.Series(range(1, len(df) + 1), name="client_id")
 
-    # job: "." -> "", "-" -> "_"
+    # job
     if c_job:
         job = (
-            df[c_job].astype(str)
-                      .str.strip()
-                      .str.replace(".", "", regex=False)
-                      .str.replace("-", "_", regex=False)
+            df[c_job].astype(str).str.strip()
+                     .str.replace(".", "", regex=False)
+                     .str.replace("-", "_", regex=False)
         )
     else:
         job = pd.Series([""] * len(df))
 
-    # education: "." -> "_", "unknown" -> NA
+    # education
     if c_educ:
         education = (
-            df[c_educ].astype(str)
-                      .str.strip()
+            df[c_educ].astype(str).str.strip()
                       .str.replace(".", "_", regex=False)
                       .replace({"unknown": pd.NA, "Unknown": pd.NA})
         )
@@ -128,19 +119,13 @@ def clean_campaign_data():
         }
     )
 
-    # -------- CAMPAIGN --------
-    # previous_outcome: success->1
+    # Campaign
     prev_outcome = to_int_01_from_success(c_poutcome)
-    # campaign_outcome: yes->1
     camp_outcome = to_int_01_from_yes(c_y)
 
-    # Fecha de último contacto con año 2022
     if c_day and c_month:
-        # pandas entiende abreviaturas 'jan','feb','mar',... en minúscula
-        # Aseguramos string y minúscula
         day_s   = df[c_day].astype(str).str.strip()
         month_s = df[c_month].astype(str).str.strip().str.lower()
-        # formateo robusto
         last_contact = pd.to_datetime(
             day_s + "-" + month_s + "-2022",
             format="%d-%b-%Y",
@@ -161,7 +146,7 @@ def clean_campaign_data():
         }
     )
 
-    # -------- ECONOMICS --------
+    # Economics
     cons_price_idx = to_float(df[c_cpi]) if c_cpi else pd.Series([float("nan")] * len(df))
     euribor_three_months = to_float(df[c_euribor]) if c_euribor else pd.Series([float("nan")] * len(df))
 
@@ -173,7 +158,12 @@ def clean_campaign_data():
         }
     )
 
-    # -------- Guardar --------
+    # Guardar
     client.to_csv(out_dir / "client.csv", index=False)
     campaign.to_csv(out_dir / "campaign.csv", index=False)
     economics.to_csv(out_dir / "economics.csv", index=False)
+
+
+if __name__ == "__main__":
+    clean_campaign_data()
+
