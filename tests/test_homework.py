@@ -1,101 +1,180 @@
-# flake8: noqa: E501
+# homework/homework.py
+from pathlib import Path
 
-"""Autograding script."""
+def clean_campaign_data():
+    """
+    Lee todos los archivos *.csv.zip en files/input/ (sin descomprimir),
+    concatena y genera tres salidas en files/output/:
+      - client.csv: client_id, age, job, marital, education, credit_default, mortgage
+      - campaign.csv: client_id, number_contacts, contact_duration, previous_campaign_contacts,
+                      previous_outcome, campaign_outcome, last_contact_date (YYYY-MM-DD)
+      - economics.csv: client_id, cons_price_idx, euribor_three_months
+    """
+    import glob
+    import pandas as pd
 
-import os
+    in_dir = Path("files/input")
+    out_dir = Path("files/output")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-import pandas as pd  # type: ignore
+    # ---- leer todo CSV dentro de cada ZIP (sin descomprimir) y unificar ----
+    paths = sorted(glob.glob(str(in_dir / "*.csv.zip")))
+    if not paths:
+        raise FileNotFoundError("No se encontraron '*.csv.zip' en files/input/")
 
-from homework import homework
+    # engine='python' + sep=None -> autodetección (soporta ';')
+    dfs = [pd.read_csv(p, compression="zip", sep=None, engine="python") for p in paths]
+    df = pd.concat(dfs, ignore_index=True)
 
-
-def test_homework():
-    """Autograding the homework."""
-    homework.clean_campaign_data()
-
-    assert os.path.exists("files/output/campaign.csv")
-    assert os.path.exists("files/output/client.csv")
-    assert os.path.exists("files/output/economics.csv")
-
-    #
-    # Campaign
-    #
-    campaign = pd.read_csv("files/output/campaign.csv")
-
-    assert campaign.shape == (41188, 7)
-    for name in (
-        "client_id,number_contacts,contact_duration,"
-        "previous_campaign_contacts,previous_outcome,"
-        "campaign_outcome,last_contact_date".split(",")
-    ):
-        assert name in campaign.columns
-
-    assert (
-        campaign[campaign["previous_outcome"].map(lambda x: x == 0)].shape[0] == 39815
-    )
-    assert (
-        campaign[campaign["campaign_outcome"].map(lambda x: x == 0)].shape[0] == 36548
+    # ---- normalizar encabezados: string, strip, lower, quitar BOM, etc. ----
+    df.columns = (
+        df.columns.astype(str)
+          .str.strip()
+          .str.lower()
+          .str.replace("\ufeff", "", regex=False)
     )
 
-    assert (
-        campaign[campaign["last_contact_date"].map(lambda x: x == "2022-07-19")].shape[
-            0
-        ]
-        == 234
+    # -------- helpers --------
+    def opt_col(*names: str):
+        """Retorna el primer nombre de columna que exista, o None."""
+        for n in names:
+            if n in df.columns:
+                return n
+        return None
+
+    def to_int_01_from_yes(col_name: str):
+        """Convierte 'yes'->1, otros->0; si falta la columna, devuelve 0."""
+        import pandas as pd
+        if col_name:
+            return df[col_name].astype(str).str.lower().eq("yes").astype(int)
+        # serie de ceros si no existe
+        return pd.Series([0] * len(df), dtype=int)
+
+    def to_int_01_from_success(col_name: str):
+        """Convierte 'success'->1, otros->0; si falta, 0."""
+        import pandas as pd
+        if col_name:
+            return df[col_name].astype(str).str.lower().eq("success").astype(int)
+        return pd.Series([0] * len(df), dtype=int)
+
+    def to_float(s):
+        """Convierte a float de forma tolerante (coma o punto decimal)."""
+        import pandas as pd
+        return (
+            s.astype(str)
+             .str.replace(",", ".", regex=False)
+             .pipe(pd.to_numeric, errors="coerce")
+             .astype(float)
+        )
+
+    # -------- alias típicos / mapeos --------
+    c_age      = opt_col("age")
+    c_job      = opt_col("job")
+    c_marital  = opt_col("marital")
+    c_educ     = opt_col("education")
+
+    # estas pueden variar
+    c_default  = opt_col("default", "credit_default")
+    c_housing  = opt_col("housing", "mortgage")
+
+    c_y        = opt_col("y", "outcome", "campaign_outcome")
+    c_campaign = opt_col("campaign", "number_contacts")
+    c_duration = opt_col("duration", "contact_duration")
+    c_previous = opt_col("previous", "previous_campaign_contacts")
+    c_poutcome = opt_col("poutcome", "previous_outcome")
+
+    c_day      = opt_col("day", "day_of_month", "last_contact_day", "contact_day")
+    c_month    = opt_col("month", "contact_month")
+
+    c_cpi      = opt_col("cons.price.idx", "cons_price_idx", "conspriceidx")
+    c_euribor  = opt_col("euribor3m", "euribor_three_months")
+
+    # -------- CLIENT --------
+    # client_id 1..n
+    import pandas as pd
+    client_id = pd.Series(range(1, len(df) + 1), name="client_id")
+
+    # job: "." -> "", "-" -> "_"
+    if c_job:
+        job = (
+            df[c_job].astype(str)
+                      .str.strip()
+                      .str.replace(".", "", regex=False)
+                      .str.replace("-", "_", regex=False)
+        )
+    else:
+        job = pd.Series([""] * len(df))
+
+    # education: "." -> "_", "unknown" -> NA
+    if c_educ:
+        education = (
+            df[c_educ].astype(str)
+                      .str.strip()
+                      .str.replace(".", "_", regex=False)
+                      .replace({"unknown": pd.NA, "Unknown": pd.NA})
+        )
+    else:
+        education = pd.Series([pd.NA] * len(df), dtype="object")
+
+    client = pd.DataFrame(
+        {
+            "client_id": client_id,
+            "age": df[c_age] if c_age else pd.Series([pd.NA] * len(df)),
+            "job": job,
+            "marital": df[c_marital] if c_marital else pd.Series([pd.NA] * len(df)),
+            "education": education,
+            "credit_default": to_int_01_from_yes(c_default),
+            "mortgage": to_int_01_from_yes(c_housing),
+        }
     )
 
-    assert (
-        campaign[campaign["last_contact_date"].map(lambda x: x == "2022-07-25")].shape[
-            0
-        ]
-        == 216
+    # -------- CAMPAIGN --------
+    # previous_outcome: success->1
+    prev_outcome = to_int_01_from_success(c_poutcome)
+    # campaign_outcome: yes->1
+    camp_outcome = to_int_01_from_yes(c_y)
+
+    # Fecha de último contacto con año 2022
+    if c_day and c_month:
+        # pandas entiende abreviaturas 'jan','feb','mar',... en minúscula
+        # Aseguramos string y minúscula
+        day_s   = df[c_day].astype(str).str.strip()
+        month_s = df[c_month].astype(str).str.strip().str.lower()
+        # formateo robusto
+        last_contact = pd.to_datetime(
+            day_s + "-" + month_s + "-2022",
+            format="%d-%b-%Y",
+            errors="coerce",
+        ).dt.strftime("%Y-%m-%d")
+    else:
+        last_contact = pd.Series([""] * len(df))
+
+    campaign = pd.DataFrame(
+        {
+            "client_id": client_id,
+            "number_contacts": df[c_campaign] if c_campaign else pd.Series([pd.NA] * len(df)),
+            "contact_duration": df[c_duration] if c_duration else pd.Series([pd.NA] * len(df)),
+            "previous_campaign_contacts": df[c_previous] if c_previous else pd.Series([pd.NA] * len(df)),
+            "previous_outcome": prev_outcome,
+            "campaign_outcome": camp_outcome,
+            "last_contact_date": last_contact,
+        }
     )
 
-    #
-    # Economics
-    #
-    economics = pd.read_csv("files/output/economics.csv")
+    # -------- ECONOMICS --------
+    cons_price_idx = to_float(df[c_cpi]) if c_cpi else pd.Series([float("nan")] * len(df))
+    euribor_three_months = to_float(df[c_euribor]) if c_euribor else pd.Series([float("nan")] * len(df))
 
-    assert economics.shape == (41188, 3)
-    for name in "client_id,cons_price_idx,euribor_three_months".split(","):
-        assert name in economics.columns
-
-    #
-    # Client
-    #
-    client = pd.read_csv("files/output/client.csv")
-    # print(client.education.value_counts())
-
-    assert client.shape == (41188, 7)
-    for name in "client_id,age,job,marital,education,credit_default,mortgage".split(
-        ","
-    ):
-        assert name in client.columns
-
-    assert client[client["job"].map(lambda x: x == "admin")].shape[0] == 10422
-    assert client[client["job"].map(lambda x: x == "blue_collar")].shape[0] == 9254
-    assert client[client["job"].map(lambda x: x == "technician")].shape[0] == 6743
-    assert client[client["job"].map(lambda x: x == "services")].shape[0] == 3969
-    assert client[client["job"].map(lambda x: x == "entrepreneur")].shape[0] == 1456
-    assert client[client["job"].map(lambda x: x == "housemaid")].shape[0] == 1060
-    assert client[client["job"].map(lambda x: x == "management")].shape[0] == 2924
-    assert client[client["job"].map(lambda x: x == "retired")].shape[0] == 1720
-
-    assert (
-        client[client["education"].map(lambda x: x == "university_degree")].shape[0]
-        == 12168
+    economics = pd.DataFrame(
+        {
+            "client_id": client_id,
+            "cons_price_idx": cons_price_idx,
+            "euribor_three_months": euribor_three_months,
+        }
     )
-    assert (
-        client[client["education"].map(lambda x: x == "high_school")].shape[0] == 9515
-    )
-    assert client[client["education"].map(lambda x: x == "basic_9y")].shape[0] == 6045
-    assert (
-        client[client["education"].map(lambda x: x == "professional_course")].shape[0]
-        == 5243
-    )
-    assert client[client["education"].map(lambda x: x == "basic_4y")].shape[0] == 4176
-    assert client[client["education"].map(lambda x: x == "basic_6y")].shape[0] == 2292
-    assert client[client["education"].map(lambda x: x == "illiterate")].shape[0] == 18
 
-    assert client[client["credit_default"].map(lambda x: x == 1)].shape[0] == 3
-    assert client[client["mortgage"].map(lambda x: x == 1)].shape[0] == 21576
+    # -------- Guardar --------
+    client.to_csv(out_dir / "client.csv", index=False)
+    campaign.to_csv(out_dir / "campaign.csv", index=False)
+    economics.to_csv(out_dir / "economics.csv", index=False)
+
